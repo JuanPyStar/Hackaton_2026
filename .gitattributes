@@ -1,0 +1,6 @@
+# Los scripts se ejecutan con bash en el servidor Linux del calificador: siempre LF.
+*.sh      text eol=lf
+validator text eol=lf
+*.py      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf

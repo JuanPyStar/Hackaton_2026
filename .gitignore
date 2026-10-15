@@ -3,3 +3,9 @@ logs/*.log
 vault/
 Legacy Escape/
 .obsidian/
+__pycache__/
+.pytest_cache/
+*.pyc
+config/*.tmp
+# Script de ensayo local del equipo (no se entrega)
+scripts/ensayo-oficial.sh
