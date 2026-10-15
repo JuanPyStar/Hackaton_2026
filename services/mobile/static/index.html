@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f2a24">
+<title>Caja Afiliados</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<style>
+  :root{
+    --bg:#0f2a24; --bg2:#163a32; --card:#f6f1e7; --ink:#1b1b18; --muted:#6b675d;
+    --gold:#e9c46a; --ok:#2a9d8f; --warn:#e76f51; --sus:#b08900; --line:#e2dccd;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(120% 60% at 50% 0%,var(--bg2),var(--bg));
+       color:#f3efe6;font:16px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{max-width:480px;margin:0 auto;padding:max(20px,env(safe-area-inset-top)) 16px 40px}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  header img{width:40px;height:40px}
+  h1{font-size:20px;margin:0;letter-spacing:.2px}
+  header small{display:block;color:#b9c9c2;font-size:12px}
+  form{display:flex;gap:8px;margin-bottom:18px}
+  input{flex:1;min-width:0;padding:14px 16px;border-radius:14px;border:1px solid #2f5a4f;background:#0b211c;
+        color:#fff;font-size:17px;letter-spacing:1px}
+  input:focus{outline:2px solid var(--gold);border-color:transparent}
+  button{padding:0 18px;border:0;border-radius:14px;background:var(--gold);color:#1b1b18;font-weight:700;font-size:15px}
+  button:active{transform:translateY(1px)}
+  .card{background:var(--card);color:var(--ink);border-radius:20px;padding:20px;box-shadow:0 18px 40px rgba(0,0,0,.35);
+        position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;inset:0 0 auto 0;height:6px;background:linear-gradient(90deg,var(--gold),var(--ok))}
+  .label{font-size:11px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted);margin:0 0 2px}
+  .name{font-size:22px;font-weight:750;margin:2px 0 4px;line-height:1.2}
+  .doc{font-variant-numeric:tabular-nums;color:var(--muted);font-size:14px}
+  .chip{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;color:#fff;margin-top:10px}
+  .ACTIVE{background:var(--ok)} .RETIRED{background:var(--warn)} .SUSPENDED{background:var(--sus)}
+  .grid{display:grid;grid-template-columns:1fr auto;gap:4px 12px;margin-top:18px;padding-top:16px;border-top:1px dashed var(--line)}
+  .big{font-size:26px;font-weight:800;text-align:right;color:var(--ok)}
+  h2{font-size:13px;letter-spacing:1.4px;text-transform:uppercase;color:#b9c9c2;margin:26px 4px 10px}
+  ul{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+  li{background:#123129;border:1px solid #23493f;border-radius:14px;padding:12px 14px;display:flex;justify-content:space-between;gap:10px}
+  li span{color:#b9c9c2;font-size:13px;white-space:nowrap}
+  .msg{padding:16px;border-radius:14px;background:#123129;border:1px solid #23493f;color:#d9e4df}
+  .msg.err{border-color:var(--warn)}
+  .foot{margin-top:28px;font-size:12px;color:#8fa79e;text-align:center}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="/icon.svg" alt="">
+    <div><h1>Caja Afiliados</h1><small>Consulta móvil · solo lectura</small></div>
+  </header>
+
+  <form id="f" autocomplete="off">
+    <input id="doc" inputmode="numeric" pattern="[0-9]*" maxlength="15" placeholder="Número de documento" aria-label="Número de documento" required>
+    <button type="submit">Buscar</button>
+  </form>
+
+  <div id="out" class="msg">Escribe un documento para ver la afiliación, la empresa y los beneficiarios.</div>
+
+  <section id="res" class="hidden">
+    <div class="card">
+      <p class="label">Afiliado</p>
+      <div class="name" id="name"></div>
+      <div class="doc" id="document"></div>
+      <span class="chip" id="status"></span>
+      <div class="grid">
+        <div><p class="label">Empresa</p><strong id="company"></strong></div>
+        <div><p class="label">Activos</p><div class="big" id="active">–</div></div>
+      </div>
+    </div>
+    <h2>Beneficiarios</h2>
+    <ul id="bens"></ul>
+  </section>
+
+  <p class="foot">Los datos llegan por el gateway de la Caja; esta app no se conecta a la base.</p>
+</main>
+<script>
+const STATUS = {ACTIVE: "Activo", RETIRED: "Retirado", SUSPENDED: "Suspendido"};
+const REL = {SPOUSE: "Cónyuge", CHILD: "Hijo(a)", FATHER: "Padre", MOTHER: "Madre", OTHER: "Otro"};
+const $ = (id) => document.getElementById(id);
+const mask = (d) => "•".repeat(Math.max(0, d.length - 4)) + d.slice(-4);
+
+async function get(path) {
+  const r = await fetch(path);
+  let body = null;
+  try { body = await r.json(); } catch (e) {}
+  return {status: r.status, body};
+}
+
+function message(text, error) {
+  $("res").classList.add("hidden");
+  const out = $("out");
+  out.textContent = text;
+  out.className = "msg" + (error ? " err" : "");
+  out.classList.remove("hidden");
+}
+
+$("f").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const doc = $("doc").value.replace(/\D/g, "");
+  if (!doc) return;
+  message("Consultando…");
+  const m = await get("/api/members/" + doc);
+  if (m.status === 404) return message("No encontramos un afiliado con ese documento.", true);
+  if (m.status === 503) return message("El sistema de la Caja está en mantenimiento. Intenta en unos minutos.", true);
+  if (m.status !== 200) return message((m.body && m.body.message) || "No fue posible consultar.", true);
+
+  const member = m.body;
+  $("name").textContent = member.fullName;
+  $("document").textContent = "Doc. " + mask(member.document);
+  $("status").textContent = STATUS[member.status] || member.status;
+  $("status").className = "chip " + member.status;
+  $("company").textContent = member.company ? member.company.name : "Sin empresa";
+  $("active").textContent = "–";
+  $("bens").innerHTML = "";
+
+  const [b, c] = await Promise.all([
+    get("/api/members/" + doc + "/beneficiaries"),
+    member.company ? get("/api/companies/" + encodeURIComponent(member.company.id)) : Promise.resolve({status: 0})
+  ]);
+  if (c.status === 200) $("active").textContent = c.body.activeMembers;
+  const list = b.status === 200 ? b.body : [];
+  if (!list.length) {
+    const li = document.createElement("li"); li.textContent = "Sin beneficiarios registrados"; $("bens").appendChild(li);
+  }
+  for (const ben of list) {
+    const li = document.createElement("li");
+    const name = document.createElement("div"); name.textContent = ben.fullName;
+    const rel = document.createElement("span"); rel.textContent = REL[ben.relationship] || ben.relationship;
+    li.append(name, rel); $("bens").appendChild(li);
+  }
+  $("out").classList.add("hidden");
+  $("res").classList.remove("hidden");
+});
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+</script>
+</body>
+</html>
