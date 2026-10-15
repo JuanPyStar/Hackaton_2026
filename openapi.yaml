@@ -1,0 +1,261 @@
+openapi: 3.0.3
+info:
+  title: Legacy Escape — Gateway de Afiliaciones
+  version: 1.0.0
+  description: |
+    Capa de transición sobre el sistema legacy de la Caja. Los consumidores (portal, Subsidios, app móvil)
+    usan este contrato y el modelo canónico; nunca ven tablas, columnas ni códigos legacy.
+    Autenticación `Authorization: Bearer <token>` con un token por consumidor (PORTAL_TOKEN, SUBSIDIOS_TOKEN,
+    MOBILE_TOKEN). El token móvil es de solo lectura.
+servers:
+  - url: http://localhost:8082
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Estado del gateway y del legacy (siempre 200)
+      security: []
+      responses:
+        "200":
+          description: Gateway arriba; `legacy` indica si la base responde.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/v1/members/{document}:
+    get:
+      summary: Afiliado en modelo canónico
+      parameters: [ { $ref: "#/components/parameters/Document" } ]
+      responses:
+        "200":
+          description: Afiliado encontrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Member" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/LegacyUnavailable" }
+
+  /api/v1/members/{document}/beneficiaries:
+    get:
+      summary: Beneficiarios del afiliado
+      parameters: [ { $ref: "#/components/parameters/Document" } ]
+      responses:
+        "200":
+          description: Lista (puede estar vacía)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Beneficiary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/LegacyUnavailable" }
+
+  /api/v1/companies/{id}:
+    get:
+      summary: Empresa y número de afiliados activos
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, example: "2014" }
+      responses:
+        "200":
+          description: Empresa encontrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Company" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/LegacyUnavailable" }
+
+  /api/v1/members/{document}/retirements:
+    post:
+      summary: Registra el retiro del afiliado (idempotente por requestId)
+      description: |
+        201 la primera vez; 200 con la misma respuesta si se repite el `requestId` (sin duplicar el movimiento).
+        Con el legacy caído responde 202: el retiro queda en una outbox durable y se aplica una sola vez al recuperarse.
+        Requiere PORTAL_TOKEN o SUBSIDIOS_TOKEN (MOBILE_TOKEN → 403).
+      parameters: [ { $ref: "#/components/parameters/Document" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RetirementRequest" }
+      responses:
+        "201":
+          description: Retiro registrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retirement" }
+        "200":
+          description: Repetición del mismo requestId (respuesta original, sin duplicar)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retirement" }
+        "202":
+          description: Legacy caído; retiro aceptado en la outbox (status PENDING)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Retirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: El requestId ya se usó para otro afiliado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/migration/status:
+    get:
+      summary: Estado de migración por dominio
+      responses:
+        "200":
+          description: Estados LEGACY, DUAL o MODERN
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MigrationStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/migration/drift:
+    get:
+      summary: Comparador de deriva (shadow check) gateway vs. lectura directa de Educación
+      parameters:
+        - name: sample
+          in: query
+          schema: { type: integer, default: 20, minimum: 0, maximum: 100 }
+          description: Tamaño de la muestra; 0 devuelve la última corrida sin ejecutar otra.
+      responses:
+        "200":
+          description: Resultado de la comparación
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Drift" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/LegacyUnavailable" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    Document:
+      name: document
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]{3,15}$", example: "1019282447" }
+
+  responses:
+    BadRequest:
+      description: Solicitud inválida
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Token ausente o inválido
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: El consumidor no tiene permiso de escritura
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Recurso inexistente
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    LegacyUnavailable:
+      description: Legacy caído (respuesta en menos de 3 s)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - type: object
+                properties:
+                  code: { type: string, enum: [LEGACY_UNAVAILABLE] }
+
+  schemas:
+    Error:
+      type: object
+      required: [message, error_id]
+      properties:
+        message: { type: string, example: "No existe un afiliado con ese documento" }
+        error_id: { type: string, example: "ERR-8A8247D7CB7E" }
+    Health:
+      type: object
+      required: [status, legacy]
+      properties:
+        status: { type: string, enum: [UP] }
+        legacy: { type: string, enum: [UP, DOWN] }
+        pendingRetirements: { type: integer, description: "Retiros en la outbox esperando la base" }
+    CompanyRef:
+      type: object
+      properties:
+        id: { type: string, example: "2014" }
+        name: { type: string, example: "AGROPECUARIA SANTANDER SA" }
+    Member:
+      type: object
+      required: [document, fullName, status, company]
+      properties:
+        document: { type: string, example: "1019282447" }
+        fullName: { type: string, example: "IVAN HERNANDEZ GARCIA" }
+        status: { type: string, enum: [ACTIVE, RETIRED, SUSPENDED] }
+        company:
+          nullable: true
+          allOf: [ { $ref: "#/components/schemas/CompanyRef" } ]
+    Beneficiary:
+      type: object
+      required: [document, fullName, relationship]
+      properties:
+        document: { type: string }
+        fullName: { type: string }
+        relationship: { type: string, enum: [SPOUSE, CHILD, FATHER, MOTHER, OTHER] }
+    Company:
+      type: object
+      required: [id, name, activeMembers]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        activeMembers: { type: integer }
+    RetirementRequest:
+      type: object
+      required: [requestId, date, reason]
+      properties:
+        requestId: { type: string, maxLength: 100, example: "subsidios-2026-10-05-0001" }
+        date: { type: string, format: date, example: "2026-10-05" }
+        reason: { type: string, maxLength: 200, example: "voluntario" }
+    Retirement:
+      type: object
+      properties:
+        requestId: { type: string }
+        document: { type: string }
+        date: { type: string, format: date }
+        reason: { type: string }
+        status: { type: string, enum: [RETIRED, PENDING] }
+        movementId: { type: integer, nullable: true }
+    MigrationStatus:
+      type: object
+      required: [domains]
+      properties:
+        domains:
+          type: object
+          additionalProperties: { type: string, enum: [LEGACY, DUAL, MODERN] }
+          example: { affiliations: DUAL, contributions: LEGACY, reports: LEGACY }
+    Drift:
+      type: object
+      properties:
+        comparedWith: { type: string, example: educacion-app }
+        checked: { type: integer }
+        differences: { type: integer }
+        unavailable: { type: integer }
+        lastRun: { type: string, format: date-time }
+        examples:
+          type: array
+          items:
+            type: object
+            properties:
+              document: { type: string, example: "******2447" }
+              fields: { type: array, items: { type: string } }
